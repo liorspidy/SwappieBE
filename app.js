@@ -9,6 +9,15 @@ const { SPOTIFY_CLIENT_ID, SPOTIFY_CLIENT_SECRET, PORT = 3000 } = process.env;
 const app = express();
 app.use(cors());
 
+function fetchWithTimeout(url, options = {}, timeoutMs = 8000) {
+  return Promise.race([
+    fetch(url, options),
+    new Promise((_, reject) =>
+      setTimeout(() => reject(new Error("Fetch timeout")), timeoutMs)
+    ),
+  ]);
+}
+
 // ✅ Spotify token endpoint
 app.get("/api/spotify/token", async (_req, res) => {
   try {
@@ -43,16 +52,13 @@ app.get("/api/spotify/resolve", async (req, res) => {
   if (!currentUrl) return res.status(400).json({ error: "Missing URL" });
 
   try {
-    // 1) Normalize Branch/Spotify deep-links
-    //    a) If it's an app.link, force web fallback and add a desktop UA
+    // Handle app.link → force web fallback
     const isAppLink = /:\/\/(.*\.)?spotify\.app\.link/i.test(currentUrl);
     if (isAppLink) {
       const hasQuery = currentUrl.includes("?");
-      // Force Branch to use the web redirect instead of app-deep-link
       currentUrl = currentUrl + (hasQuery ? "&" : "?") + "$web_only=true";
     }
 
-    // 2) Try to follow 30x redirects manually, with a desktop UA
     const UA =
       "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 " +
       "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36";
@@ -61,7 +67,7 @@ app.get("/api/spotify/resolve", async (req, res) => {
     const MAX = 10;
 
     while (redirects < MAX) {
-      const r = await fetch(currentUrl, {
+      const r = await fetchWithTimeout(currentUrl, {
         method: "GET",
         redirect: "manual",
         headers: { "User-Agent": UA, Accept: "text/html,*/*" },
@@ -74,20 +80,20 @@ app.get("/api/spotify/resolve", async (req, res) => {
         continue;
       }
 
-      // If we got an HTML page (Branch), try to extract a meta/anchor to open.spotify.com
+      // fallback: meta refresh or direct anchor to open.spotify.com
       const ct = r.headers.get("content-type") || "";
       if (ct.includes("text/html")) {
         const html = await r.text();
 
-        // Try <meta http-equiv="refresh" content="0; url=...">
-        const metaMatch = html.match(/http-equiv=["']refresh["'][^>]*content=["'][^"]*url=([^"']+)/i);
+        const metaMatch = html.match(
+          /http-equiv=["']refresh["'][^>]*content=["'][^"]*url=([^"']+)/i
+        );
         if (metaMatch?.[1]) {
           currentUrl = metaMatch[1];
           redirects++;
           continue;
         }
 
-        // Try a direct anchor to open.spotify.com
         const aMatch = html.match(/https?:\/\/open\.spotify\.com\/[^\s"'<>]+/i);
         if (aMatch?.[0]) {
           currentUrl = aMatch[0];
@@ -99,9 +105,10 @@ app.get("/api/spotify/resolve", async (req, res) => {
     return res.json({ resolvedUrl: currentUrl });
   } catch (err) {
     console.error("Failed to resolve short link:", err);
-    return res.status(500).json({ error: "resolve_error" });
+    return res.status(500).json({ error: "resolve_error", message: err.message });
   }
 });
+
 
 
 app.listen(PORT, () => {
