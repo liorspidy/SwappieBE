@@ -46,6 +46,22 @@ app.get("/api/spotify/token", async (_req, res) => {
   }
 });
 
+app.get("/api/apple/search", async (req, res) => {
+  const { term } = req.query;
+  const url = encodeURI(
+    `https://itunes.apple.com/search?term=${term}&entity=song&limit=5&explicit=Yes`
+  );
+
+  try {
+    const response = await fetch(url);
+    const data = await response.json();
+    res.json(data);
+  } catch (err) {
+    console.error("Apple proxy error:", err);
+    res.status(500).json({ error: "apple_proxy_failed" });
+  }
+});
+
 // New endpoint to resolve short Spotify links
 app.get("/api/spotify/resolve", async (req, res) => {
   let currentUrl = req.query.url;
