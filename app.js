@@ -11,7 +11,7 @@ app.set("trust proxy", 1); // Render sits behind a proxy; needed for req.ip to r
 
 const allowedOrigins = (process.env.FRONTEND_ORIGIN || "http://localhost:5173")
   .split(",")
-  .map((o) => o.trim());
+  .map((o) => o.trim().replace(/\/+$/, "")); // browsers send Origin with no trailing slash
 app.use(cors({ origin: allowedOrigins }));
 
 function fetchWithTimeout(url, options = {}, timeoutMs = 8000) {
