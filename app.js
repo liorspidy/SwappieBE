@@ -139,6 +139,58 @@ app.get("/api/spotify/search", async (req, res) => {
 });
 
 // --- Apple / iTunes Search API (free, public, no auth) ---
+
+// ponytail: small fixed list, not true global coverage — expand only if a
+// specific region's exclusives become a recurring complaint
+const APPLE_FALLBACK_COUNTRIES = ["IL", "US"];
+
+// Picks a storefront hint from Accept-Language, honoring q-priority across all
+// tags (not just the first) — e.g. "en;q=0.5,he-IL;q=0.9" should resolve to IL.
+export function storefrontFromAcceptLanguage(header) {
+  if (!header) return null;
+  const tags = header.split(",").map((part) => {
+    const [tag, ...params] = part.trim().split(";");
+    const qParam = params.find((p) => p.trim().startsWith("q="));
+    const q = qParam ? parseFloat(qParam.split("=")[1]) : 1;
+    return { tag: tag.trim(), q: Number.isNaN(q) ? 1 : q };
+  });
+  tags.sort((a, b) => b.q - a.q);
+  for (const { tag } of tags) {
+    const match = tag.match(/-([A-Za-z]{2})(?:-|$)/);
+    if (match) return match[1].toUpperCase();
+  }
+  return null;
+}
+
+async function fetchAppleSearch(term, entity, limit, country) {
+  const params = new URLSearchParams({ term, entity, limit: String(limit), explicit: "Yes", country });
+  const response = await fetchWithTimeout(`https://itunes.apple.com/search?${params}`);
+  return response.json();
+}
+
+// Apple's catalog is licensed/indexed per storefront, so the same query can miss
+// entirely in one country and succeed in another. Try the caller's own storefront
+// first, then a couple of broad-catalog fallbacks, stopping at the first hit.
+async function appleSearchAcrossStorefronts(term, entity, limit, preferredCountry) {
+  const countries = [preferredCountry, ...APPLE_FALLBACK_COUNTRIES].filter(
+    (c, i, arr) => c && arr.indexOf(c) === i
+  );
+
+  let lastData = { resultCount: 0, results: [] };
+  let lastError = null;
+  for (const country of countries) {
+    try {
+      lastData = await fetchAppleSearch(term, entity, limit, country);
+      lastError = null;
+      if (lastData.resultCount > 0) return lastData;
+    } catch (err) {
+      lastError = err; // this storefront failed outright — try the next one
+    }
+  }
+  if (lastError) throw lastError;
+  return lastData;
+}
+
 app.get("/api/apple/search", async (req, res) => {
   const { term } = req.query;
   if (!term || typeof term !== "string" || !term.trim()) {
@@ -146,11 +198,10 @@ app.get("/api/apple/search", async (req, res) => {
   }
   const entity = ["song", "album"].includes(req.query.entity) ? req.query.entity : "song";
   const limit = Math.min(Math.max(Number(req.query.limit) || 5, 1), 25);
+  const preferredCountry = storefrontFromAcceptLanguage(req.get("Accept-Language"));
 
   try {
-    const params = new URLSearchParams({ term, entity, limit: String(limit), explicit: "Yes" });
-    const response = await fetchWithTimeout(`https://itunes.apple.com/search?${params}`);
-    const data = await response.json();
+    const data = await appleSearchAcrossStorefronts(term, entity, limit, preferredCountry);
     res.json(data);
   } catch (err) {
     console.error("Apple proxy error:", err);
@@ -158,6 +209,10 @@ app.get("/api/apple/search", async (req, res) => {
   }
 });
 
-app.listen(PORT, () => {
-  console.log(`✅ Server running on http://localhost:${PORT}`);
-});
+export default app;
+
+if (import.meta.url === `file://${process.argv[1]}`) {
+  app.listen(PORT, () => {
+    console.log(`✅ Server running on http://localhost:${PORT}`);
+  });
+}
