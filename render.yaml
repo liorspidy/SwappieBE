@@ -1,0 +1,16 @@
+services:
+  - type: web
+    name: swappie-be
+    runtime: node
+    plan: free
+    branch: master
+    buildCommand: npm install
+    startCommand: node app.js
+    autoDeploy: true
+    envVars:
+      - key: SPOTIFY_CLIENT_ID
+        sync: false
+      - key: SPOTIFY_CLIENT_SECRET
+        sync: false
+      - key: FRONTEND_ORIGIN
+        sync: false
